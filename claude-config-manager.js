@@ -10,7 +10,7 @@ const readline = require('readline');
 // =======================================
 
 // Base directory for Claude files (change this to match your system)
-const CLAUDE_DIR = 'C:\\Users\\leeev\\AppData\\Roaming\\Claude';
+const CLAUDE_DIR = 'C:\\Users\\username\\AppData\\Roaming\\Claude';
 const CONFIG_FILE_PATH = path.join(CLAUDE_DIR, 'claude_desktop_config.json');
 const BACKUP_DIR = path.join(CLAUDE_DIR, 'config-backups');
 const PRESET_DIR = path.join(CLAUDE_DIR, 'presets');
