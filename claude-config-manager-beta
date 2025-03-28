@@ -1,0 +1,1095 @@
+// Claude Desktop Config Manager
+// This script helps toggle MCP servers on/off in the Claude Desktop config file
+
+const fs = require('fs');
+const path = require('path');
+const readline = require('readline');
+
+// =======================================
+// CONFIGURATION SECTION - EDIT AS NEEDED
+// =======================================
+
+// Base directory for Claude files (change this to match your system)
+const CLAUDE_DIR = 'C:\\Users\\leeev\\AppData\\Roaming\\Claude';
+
+// File and directory names (usually don't need changing)
+const CONFIG_FILENAME = 'claude_desktop_config.json';
+const BACKUP_DIRNAME = 'config-backups';
+const PRESET_DIRNAME = 'presets';
+
+// Full paths (automatically constructed)
+const CONFIG_FILE_PATH = path.join(CLAUDE_DIR, CONFIG_FILENAME);
+const BACKUP_DIR = path.join(CLAUDE_DIR, BACKUP_DIRNAME);
+const PRESET_DIR = path.join(CLAUDE_DIR, PRESET_DIRNAME);
+
+// =======================================
+// END OF CONFIGURATION SECTION
+// =======================================
+
+// Ensure backup directory exists
+if (!fs.existsSync(BACKUP_DIR)) {
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+}
+
+// Ensure preset directory exists
+if (!fs.existsSync(PRESET_DIR)) {
+  fs.mkdirSync(PRESET_DIR, { recursive: true });
+}
+
+// Create readline interface for user input
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout
+});
+
+// Color codes for console output
+const colors = {
+  reset: "\x1b[0m",
+  bright: "\x1b[1m",
+  dim: "\x1b[2m",
+  underscore: "\x1b[4m",
+  blink: "\x1b[5m",
+  reverse: "\x1b[7m",
+  hidden: "\x1b[8m",
+  
+  fg: {
+    black: "\x1b[30m",
+    red: "\x1b[31m",
+    green: "\x1b[32m",
+    yellow: "\x1b[33m",
+    blue: "\x1b[34m",
+    magenta: "\x1b[35m",
+    cyan: "\x1b[36m",
+    white: "\x1b[37m",
+    crimson: "\x1b[38m"
+  },
+  
+  bg: {
+    black: "\x1b[40m",
+    red: "\x1b[41m",
+    green: "\x1b[42m",
+    yellow: "\x1b[43m",
+    blue: "\x1b[44m",
+    magenta: "\x1b[45m",
+    cyan: "\x1b[46m",
+    white: "\x1b[47m",
+    crimson: "\x1b[48m"
+  }
+};
+
+// Colored console output functions
+function success(text) {
+  console.log(`${colors.fg.green}${text}${colors.reset}`);
+}
+
+function warning(text) {
+  console.log(`${colors.fg.yellow}${text}${colors.reset}`);
+}
+
+function error(text) {
+  console.log(`${colors.fg.red}${text}${colors.reset}`);
+}
+
+function info(text) {
+  console.log(`${colors.fg.cyan}${text}${colors.reset}`);
+}
+
+function header(text) {
+  console.log(`\n${colors.bright}${colors.fg.magenta}=== ${text} ===${colors.reset}`);
+}
+
+function menuItem(text) {
+  console.log(`${colors.fg.yellow}${text}${colors.reset}`);
+}
+
+// Read config file
+function readConfig() {
+  try {
+    const configData = fs.readFileSync(CONFIG_FILE_PATH, 'utf8');
+    try {
+      return JSON.parse(configData);
+    } catch (jsonError) {
+      console.error('Error parsing JSON in config file:', jsonError.message);
+      console.log('\nJSON error details:');
+      
+      // Find the problematic position
+      const position = parseInt(jsonError.message.match(/position (\d+)/)?.[1]);
+      if (position) {
+        // Display a snippet of the file around the error
+        const start = Math.max(0, position - 20);
+        const end = Math.min(configData.length, position + 20);
+        const snippet = configData.substring(start, end);
+        
+        console.log('\nFile snippet around error:');
+        console.log(snippet);
+        console.log(' '.repeat(Math.min(20, position - start)) + '^-- Error likely near here');
+        
+        // Try to identify common JSON errors
+        const lastFewChars = configData.substring(Math.max(0, position - 5), position);
+        if (lastFewChars.includes(',') && configData[position] === '}') {
+          console.log('\nTip: There might be a trailing comma before a closing brace }');
+        }
+      }
+      
+      console.log('\nYou may need to fix your JSON file before using this tool.');
+      console.log('Common JSON syntax errors include:');
+      console.log('1. Missing commas between properties');
+      console.log('2. Extra commas at the end of lists or objects');
+      console.log('3. Missing quotes around property names');
+      console.log('4. Unmatched brackets or braces');
+      
+      process.exit(1);
+    }
+  } catch (error) {
+    console.error('Error reading config file:', error.message);
+    console.log('If the file doesn\'t exist, you may need to specify the correct path.');
+    process.exit(1);
+  }
+}
+
+// Write config file
+function writeConfig(config) {
+  try {
+    // Keep only the most recent backup
+    const backupPath = path.join(BACKUP_DIR, 'config-latest-backup.json');
+    
+    // Make backup message more prominent
+    header('BACKUP INFORMATION');
+    info(`Creating backup of current config at: ${backupPath}`);
+    
+    fs.writeFileSync(backupPath, fs.readFileSync(CONFIG_FILE_PATH));
+    
+    success(`Backup successfully created!`);
+    console.log(`${colors.fg.magenta}==========================${colors.reset}\n`);
+    
+    // Write the new config
+    fs.writeFileSync(CONFIG_FILE_PATH, JSON.stringify(config, null, 2));
+    success(`Config successfully updated at: ${CONFIG_FILE_PATH}`);
+  } catch (error) {
+    error(`Error writing config file: ${error.message}`);
+  }
+}
+
+// Display list of MCP servers and their status
+function displayMcpStatus(config) {
+  header('Current MCP Servers');
+  
+  const mcpServers = config.mcpServers || {};
+  const disabledMcpServers = config.disabledMcpServers || {};
+  
+  let index = 1;
+  const mcpMap = new Map();
+  
+  // List enabled servers
+  console.log(`\n${colors.bright}${colors.fg.green}ENABLED SERVERS:${colors.reset}`);
+  if (Object.keys(mcpServers).length === 0) {
+    console.log('No enabled servers.');
+  } else {
+    Object.keys(mcpServers).forEach(key => {
+      console.log(`${index}. ${colors.fg.green}[ENABLED]${colors.reset} ${key}`);
+      mcpMap.set(index.toString(), { name: key, enabled: true });
+      index++;
+    });
+  }
+  
+  // List disabled servers
+  console.log(`\n${colors.bright}${colors.fg.red}DISABLED SERVERS:${colors.reset}`);
+  if (Object.keys(disabledMcpServers).length === 0) {
+    console.log('No disabled servers.');
+  } else {
+    Object.keys(disabledMcpServers).forEach(key => {
+      console.log(`${index}. ${colors.fg.red}[DISABLED]${colors.reset} ${key}`);
+      mcpMap.set(index.toString(), { name: key, enabled: false });
+      index++;
+    });
+  }
+  
+  return mcpMap;
+}
+
+// Toggle MCP server status
+function toggleMcp(config, mcpInfo) {
+  const { name, enabled } = mcpInfo;
+  
+  // Ensure disabledMcpServers exists
+  if (!config.disabledMcpServers) {
+    config.disabledMcpServers = {};
+  }
+  
+  if (enabled) {
+    // Move from enabled to disabled
+    config.disabledMcpServers[name] = config.mcpServers[name];
+    delete config.mcpServers[name];
+    warning(`Disabled MCP server: ${name}`);
+  } else {
+    // Move from disabled to enabled
+    config.mcpServers[name] = config.disabledMcpServers[name];
+    delete config.disabledMcpServers[name];
+    success(`Enabled MCP server: ${name}`);
+  }
+  
+  return config;
+}
+
+// List available presets - FIXED VERSION
+function listPresets() {
+  info(`Looking for presets in: ${PRESET_DIR}`);
+  
+  try {
+    // Read directory contents
+    const files = fs.readdirSync(PRESET_DIR);
+    
+    // Check if directory is empty
+    if (files.length === 0) {
+      warning('No files found in preset directory.');
+      return [];
+    }
+    
+    info(`Found ${files.length} files in preset directory.`);
+    
+    // Filter JSON files and create preset objects
+    const presets = [];
+    
+    for (const file of files) {
+      if (file.endsWith('.json')) {
+        const fullPath = path.join(PRESET_DIR, file);
+        const presetName = file.replace('.json', '');
+        
+        try {
+          // Verify file is readable
+          const stats = fs.statSync(fullPath);
+          if (stats.isFile()) {
+            presets.push({
+              name: presetName,
+              path: fullPath
+            });
+          }
+        } catch (err) {
+          error(`Error accessing preset file ${file}: ${err.message}`);
+        }
+      }
+    }
+    
+    // Display results
+    if (presets.length === 0) {
+      warning('No valid preset files found.');
+      return [];
+    }
+    
+    header('Available Presets');
+    presets.forEach((preset, index) => {
+      info(`${index + 1}. ${preset.name}`);
+    });
+    
+    return presets;
+  } catch (error) {
+    error(`Error reading preset directory: ${error.message}`);
+    return [];
+  }
+}
+
+// Save a preset configuration
+function savePreset(config, presetName) {
+  const presetPath = path.join(PRESET_DIR, `${presetName}.json`);
+  
+  try {
+    fs.writeFileSync(presetPath, JSON.stringify(config, null, 2));
+    success(`Preset saved: ${presetPath}`);
+  } catch (error) {
+    error(`Error saving preset: ${error.message}`);
+  }
+}
+
+// Load a preset configuration
+function loadPreset(preset) {
+  try {
+    info(`Loading preset from: ${preset.path}`);
+    const presetData = fs.readFileSync(preset.path, 'utf8');
+    return JSON.parse(presetData);
+  } catch (error) {
+    error(`Error loading preset "${preset.name}": ${error.message}`);
+    return null;
+  }
+}
+
+// Main menu
+function showMainMenu() {
+  header('Claude Desktop Config Manager');
+  menuItem('1. Toggle MCP Servers');
+  menuItem('2. Save Current Configuration as Preset');
+  menuItem('3. Load Preset Configuration');
+  menuItem('4. Export All MCPs as Enabled');
+  menuItem('5. Create Custom Configuration');
+  menuItem('6. Backup & Restore Options');
+  menuItem('7. Check/Fix Config File');
+  menuItem('8. Exit');
+  
+  rl.question('\nSelect an option: ', (answer) => {
+    switch (answer) {
+      case '1':
+        handleToggleMcps();
+        break;
+      case '2':
+        handleSavePreset();
+        break;
+      case '3':
+        handleLoadPreset();
+        break;
+      case '4':
+        handleExportAllEnabled();
+        break;
+      case '5':
+        handleExportMinimal();
+        break;
+      case '6':
+        handleBackupRestoreMenu();
+        break;
+      case '7':
+        handleCheckFixConfig();
+        break;
+      case '8':
+        rl.close();
+        break;
+      default:
+        error('Invalid option. Please try again.');
+        showMainMenu();
+    }
+  });
+}
+
+// Handle toggling MCP servers
+function handleToggleMcps() {
+  console.log('\nFetching current MCP configuration...');
+  const config = readConfig();
+  const mcpMap = displayMcpStatus(config);
+  
+  rl.question('\nEnter the number of the MCP server to toggle (or "b" to go back): ', handleResponse);
+  
+  function handleResponse(answer) {
+    if (answer.toLowerCase() === 'b') {
+      showMainMenu();
+      return;
+    }
+    
+    const mcpInfo = mcpMap.get(answer);
+    if (mcpInfo) {
+      console.log(`Toggling MCP server: ${mcpInfo.name}`);
+      const updatedConfig = toggleMcp(config, mcpInfo);
+      writeConfig(updatedConfig);
+      
+      rl.question('\nToggle another MCP? (y/n): ', (answer) => {
+        if (answer.toLowerCase() === 'y') {
+          handleToggleMcps();
+        } else {
+          showMainMenu();
+        }
+      });
+    } else {
+      console.log('Invalid selection. Please try again.');
+      rl.question('\nEnter the number of the MCP server to toggle (or "b" to go back): ', handleResponse);
+    }
+  }
+}
+
+// Handle saving a preset
+function handleSavePreset() {
+  rl.question('Enter a name for this preset: ', (presetName) => {
+    if (presetName.trim() === '') {
+      console.log('Preset name cannot be empty.');
+      handleSavePreset();
+      return;
+    }
+    
+    const config = readConfig();
+    savePreset(config, presetName);
+    showMainMenu();
+  });
+}
+
+// Handle loading a preset - FIXED VERSION
+function handleLoadPreset() {
+  const presets = listPresets();
+  
+  if (presets.length === 0) {
+    rl.question('\nPress Enter to return to main menu: ', () => {
+      showMainMenu();
+    });
+    return;
+  }
+  
+  rl.question('\nEnter the number of the preset to load (or "b" to go back): ', (answer) => {
+    if (answer.toLowerCase() === 'b') {
+      showMainMenu();
+      return;
+    }
+    
+    const presetIndex = parseInt(answer) - 1;
+    if (presetIndex >= 0 && presetIndex < presets.length) {
+      const preset = presets[presetIndex];
+      
+      try {
+        console.log(`Loading preset: ${preset.name}`);
+        const presetData = fs.readFileSync(preset.path, 'utf8');
+        const presetConfig = JSON.parse(presetData);
+        
+        writeConfig(presetConfig);
+        console.log(`Successfully loaded preset: ${preset.name}`);
+      } catch (error) {
+        console.error(`Error loading preset: ${error.message}`);
+      }
+    } else {
+      console.log('Invalid selection.');
+    }
+    
+    showMainMenu();
+  });
+}
+
+// Handle exporting all MCPs as enabled
+function handleExportAllEnabled() {
+  const config = readConfig();
+  
+  // Move all disabled MCPs to enabled
+  if (config.disabledMcpServers) {
+    Object.entries(config.disabledMcpServers).forEach(([key, value]) => {
+      config.mcpServers[key] = value;
+    });
+    config.disabledMcpServers = {};
+  }
+  
+  writeConfig(config);
+  success('All MCP servers have been enabled.');
+  showMainMenu();
+}
+
+// Handle creating custom configuration with MCP selection
+function handleExportMinimal() {
+  const config = readConfig();
+  
+  // Create a list of all available MCPs
+  const allMcpsKeys = [
+    ...Object.keys(config.mcpServers || {}),
+    ...Object.keys(config.disabledMcpServers || {})
+  ];
+  
+  // Remove duplicates and sort
+  const availableMcps = [...new Set(allMcpsKeys)].sort();
+  
+  // Get required MCPs based on inspection
+  const recommendedMcps = [];
+  
+  // Check if filesystem and mcp-installer exist in the config
+  if (allMcpsKeys.includes('filesystem')) {
+    recommendedMcps.push('filesystem');
+  }
+  
+  if (allMcpsKeys.includes('mcp-installer')) {
+    recommendedMcps.push('mcp-installer');
+  }
+  
+  header('Create Custom Configuration');
+  info('Select which MCPs should remain enabled, all others will be disabled.');
+  
+  if (recommendedMcps.length > 0) {
+    info(`Recommended essential MCPs: ${recommendedMcps.join(', ')}`);
+  }
+  
+  info('\nAvailable MCPs:');
+  
+  availableMcps.forEach((mcp, index) => {
+    const isRecommended = recommendedMcps.includes(mcp);
+    console.log(`${index + 1}. ${mcp}${isRecommended ? colors.fg.yellow + ' (recommended)' + colors.reset : ''}`);
+  });
+  
+  info('\nOptions:');
+  menuItem('- Enter numbers separated by commas (e.g., "1,3,5")');
+  menuItem('- Enter "r" for recommended MCPs only (if any)');
+  menuItem('- Enter "all" to select all MCPs');
+  menuItem('- Enter "b" to go back');
+  
+  rl.question('\nSelect MCPs to enable: ', (answer) => {
+    if (answer.toLowerCase() === 'b') {
+      showMainMenu();
+      return;
+    }
+    
+    let selectedMcps = [];
+    
+    if (answer.toLowerCase() === 'r') {
+      // Use recommended MCPs
+      if (recommendedMcps.length > 0) {
+        selectedMcps = [...recommendedMcps];
+        info(`Using recommended MCPs: ${selectedMcps.join(', ')}`);
+      } else {
+        warning('No recommended MCPs identified.');
+        selectedMcps = [];
+      }
+    } else if (answer.toLowerCase() === 'all') {
+      // Select all MCPs
+      selectedMcps = [...availableMcps];
+      info('Selected all MCPs');
+    } else {
+      // Parse user selection
+      const selectedIndices = answer.split(',').map(s => parseInt(s.trim()) - 1);
+      
+      // Validate indices and get corresponding MCP names
+      selectedMcps = selectedIndices
+        .filter(i => i >= 0 && i < availableMcps.length)
+        .map(i => availableMcps[i]);
+      
+      if (selectedMcps.length === 0) {
+        warning('No valid MCPs selected.');
+        
+        if (recommendedMcps.length > 0) {
+          info(`Using recommended MCPs instead: ${recommendedMcps.join(', ')}`);
+          selectedMcps = [...recommendedMcps];
+        }
+      }
+    }
+    
+    // Create a merged copy of all MCPs
+    const allMcps = { ...config.mcpServers };
+    if (config.disabledMcpServers) {
+      Object.assign(allMcps, config.disabledMcpServers);
+    }
+    
+    // Clear both enabled and disabled
+    config.mcpServers = {};
+    config.disabledMcpServers = {};
+    
+    // Add selected MCPs to enabled
+    header('Configuring MCPs');
+    
+    if (selectedMcps.length === 0) {
+      warning('No MCPs selected to enable.');
+    } else {
+      selectedMcps.forEach(mcp => {
+        if (allMcps[mcp]) {
+          config.mcpServers[mcp] = allMcps[mcp];
+          delete allMcps[mcp];
+          success(`Enabled: ${mcp}`);
+        } else {
+          warning(`MCP '${mcp}' not found in configuration`);
+        }
+      });
+    }
+    
+    // Add rest to disabled
+    config.disabledMcpServers = allMcps;
+    
+    // Count enabled and disabled MCPs
+    const enabledCount = Object.keys(config.mcpServers).length;
+    const disabledCount = Object.keys(config.disabledMcpServers).length;
+    info(`\nEnabled ${enabledCount} MCPs, disabled ${disabledCount} MCPs`);
+    
+    writeConfig(config);
+    success('Configuration updated successfully.');
+    
+    // Offer to save this as a preset
+    rl.question('\nWould you like to save this configuration as a preset? (y/n): ', (answer) => {
+      if (answer.toLowerCase() === 'y') {
+        handleSavePreset();
+      } else {
+        showMainMenu();
+      }
+    });
+  });
+}
+
+// Handle backup & restore menu
+function handleBackupRestoreMenu() {
+  header('Backup & Restore Options');
+  menuItem('1. Create Manual Backup (with timestamp)');
+  menuItem('2. Restore Latest Backup');
+  menuItem('3. Restore From Specific Backup');
+  menuItem('4. Manage Backups (View/Delete)');
+  menuItem('5. Back to Main Menu');
+  
+  rl.question('\nSelect an option: ', (answer) => {
+    switch (answer) {
+      case '1':
+        createManualBackup();
+        break;
+      case '2':
+        handleRestoreLatestBackup();
+        break;
+      case '3':
+        handleRestoreSpecificBackup();
+        break;
+      case '4':
+        manageBackups();
+        break;
+      case '5':
+        showMainMenu();
+        break;
+      default:
+        error('Invalid option. Please try again.');
+        handleBackupRestoreMenu();
+    }
+  });
+}
+
+// Create a manual backup with timestamp
+function createManualBackup() {
+  try {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupPath = path.join(BACKUP_DIR, `config-backup-${timestamp}.json`);
+    
+    header('CREATING MANUAL BACKUP');
+    info(`Creating timestamped backup at: ${backupPath}`);
+    
+    fs.writeFileSync(backupPath, fs.readFileSync(CONFIG_FILE_PATH));
+    
+    success(`Backup successfully created!`);
+    console.log(`${colors.fg.magenta}=============================${colors.reset}\n`);
+    
+    handleBackupRestoreMenu();
+  } catch (error) {
+    error(`Error creating manual backup: ${error.message}`);
+    handleBackupRestoreMenu();
+  }
+}
+
+// Handle restoring from latest backup
+function handleRestoreLatestBackup() {
+  const backupPath = path.join(BACKUP_DIR, 'config-latest-backup.json');
+  
+  if (!fs.existsSync(backupPath)) {
+    warning('No latest backup file found.');
+    handleBackupRestoreMenu();
+    return;
+  }
+  
+  rl.question(`Are you sure you want to restore the ${colors.fg.cyan}latest backup${colors.reset}? (y/n): `, (answer) => {
+    if (answer.toLowerCase() === 'y') {
+      try {
+        // Read the backup file
+        const backupData = fs.readFileSync(backupPath, 'utf8');
+        const backupConfig = JSON.parse(backupData);
+        
+        // Create a backup of the current config before restoring
+        // (in case you need to undo the restore)
+        const tempBackupPath = path.join(BACKUP_DIR, 'pre-restore-backup.json');
+        fs.writeFileSync(tempBackupPath, fs.readFileSync(CONFIG_FILE_PATH));
+        info(`Current config backed up to: ${tempBackupPath}`);
+        
+        // Restore the backup
+        fs.writeFileSync(CONFIG_FILE_PATH, backupData);
+        success(`Backup successfully restored from: ${backupPath}`);
+      } catch (error) {
+        error(`Error restoring backup: ${error.message}`);
+      }
+    } else {
+      warning('Restore cancelled.');
+    }
+    
+    handleBackupRestoreMenu();
+  });
+}
+
+// Get list of available backups
+function getAvailableBackups() {
+  try {
+    if (!fs.existsSync(BACKUP_DIR)) {
+      return [];
+    }
+    
+    const files = fs.readdirSync(BACKUP_DIR);
+    
+    // Filter for backup files with timestamps and sort by date (newest first)
+    return files
+      .filter(file => file.startsWith('config-backup-') && file.endsWith('.json'))
+      .sort()
+      .reverse();
+      
+  } catch (error) {
+    console.error(`Error listing backups: ${error.message}`);
+    return [];
+  }
+}
+
+// Handle restoring from specific backup
+function handleRestoreSpecificBackup() {
+  const backups = getAvailableBackups();
+  
+  if (backups.length === 0) {
+    warning('No timestamped backups found.');
+    handleBackupRestoreMenu();
+    return;
+  }
+  
+  header('Available Backups');
+  
+  backups.forEach((backup, index) => {
+    // Extract the timestamp portion for more readable display
+    const timestampPart = backup.replace('config-backup-', '').replace('.json', '');
+    info(`${index + 1}. Backup from ${timestampPart}`);
+  });
+  
+  console.log(`\nEnter the number of the backup to restore, or ${colors.fg.yellow}"b"${colors.reset} to go back`);
+  
+  rl.question('Select backup: ', (answer) => {
+    if (answer.toLowerCase() === 'b') {
+      handleBackupRestoreMenu();
+      return;
+    }
+    
+    const backupIndex = parseInt(answer) - 1;
+    
+    if (backupIndex >= 0 && backupIndex < backups.length) {
+      const selectedBackup = backups[backupIndex];
+      const backupPath = path.join(BACKUP_DIR, selectedBackup);
+      
+      rl.question(`Are you sure you want to restore the backup from ${colors.fg.cyan}${selectedBackup.replace('config-backup-', '').replace('.json', '')}${colors.reset}? (y/n): `, (confirmation) => {
+        if (confirmation.toLowerCase() === 'y') {
+          try {
+            // Read the backup file
+            const backupData = fs.readFileSync(backupPath, 'utf8');
+            const backupConfig = JSON.parse(backupData);
+            
+            // Create a backup of the current config before restoring
+            const tempBackupPath = path.join(BACKUP_DIR, 'pre-restore-backup.json');
+            fs.writeFileSync(tempBackupPath, fs.readFileSync(CONFIG_FILE_PATH));
+            info(`Current config backed up to: ${tempBackupPath}`);
+            
+            // Restore the backup
+            fs.writeFileSync(CONFIG_FILE_PATH, backupData);
+            success(`Backup successfully restored from: ${backupPath}`);
+          } catch (error) {
+            error(`Error restoring backup: ${error.message}`);
+          }
+        } else {
+          warning('Restore cancelled.');
+        }
+        
+        handleBackupRestoreMenu();
+      });
+    } else {
+      error('Invalid selection.');
+      handleRestoreSpecificBackup();
+    }
+  });
+}
+
+// Manage backups (view/delete)
+function manageBackups() {
+  const backups = getAvailableBackups();
+  
+  if (backups.length === 0) {
+    warning('No timestamped backups found.');
+    handleBackupRestoreMenu();
+    return;
+  }
+  
+  header('Backup Management');
+  console.log(`${colors.bright}Available Backups:${colors.reset}`);
+  
+  backups.forEach((backup, index) => {
+    // Extract the timestamp portion for more readable display
+    const timestampPart = backup.replace('config-backup-', '').replace('.json', '');
+    info(`${index + 1}. Backup from ${timestampPart}`);
+  });
+  
+  console.log('\nOptions:');
+  menuItem('1. Delete a specific backup');
+  menuItem('2. Delete all timestamped backups');
+  menuItem('3. Back to Backup Menu');
+  
+  rl.question('\nSelect an option: ', (answer) => {
+    switch (answer) {
+      case '1':
+        handleDeleteSpecificBackup(backups);
+        break;
+      case '2':
+        handleDeleteAllBackups(backups);
+        break;
+      case '3':
+        handleBackupRestoreMenu();
+        break;
+      default:
+        error('Invalid option.');
+        manageBackups();
+    }
+  });
+}
+
+// Handle deleting a specific backup
+function handleDeleteSpecificBackup(backups) {
+  rl.question('Enter the number of the backup to delete, or "b" to go back: ', (answer) => {
+    if (answer.toLowerCase() === 'b') {
+      manageBackups();
+      return;
+    }
+    
+    const backupIndex = parseInt(answer) - 1;
+    
+    if (backupIndex >= 0 && backupIndex < backups.length) {
+      const selectedBackup = backups[backupIndex];
+      const backupPath = path.join(BACKUP_DIR, selectedBackup);
+      
+      rl.question(`Are you sure you want to delete the backup from ${colors.fg.cyan}${selectedBackup.replace('config-backup-', '').replace('.json', '')}${colors.reset}? (y/n): `, (confirmation) => {
+        if (confirmation.toLowerCase() === 'y') {
+          try {
+            fs.unlinkSync(backupPath);
+            success(`Backup deleted: ${backupPath}`);
+          } catch (error) {
+            error(`Error deleting backup: ${error.message}`);
+          }
+        } else {
+          warning('Deletion cancelled.');
+        }
+        
+        manageBackups();
+      });
+    } else {
+      error('Invalid selection.');
+      handleDeleteSpecificBackup(backups);
+    }
+  });
+}
+
+// Handle deleting all timestamped backups
+function handleDeleteAllBackups(backups) {
+  rl.question(`${colors.fg.red}${colors.bright}Are you sure you want to delete ALL timestamped backups? This cannot be undone.${colors.reset} (y/n): `, (answer) => {
+    if (answer.toLowerCase() === 'y') {
+      try {
+        let deletedCount = 0;
+        
+        backups.forEach(backup => {
+          const backupPath = path.join(BACKUP_DIR, backup);
+          fs.unlinkSync(backupPath);
+          deletedCount++;
+        });
+        
+        success(`Successfully deleted ${deletedCount} backups.`);
+      } catch (error) {
+        error(`Error deleting backups: ${error.message}`);
+      }
+    } else {
+      warning('Deletion cancelled.');
+    }
+    
+    handleBackupRestoreMenu();
+  });
+}
+
+// Handle checking and fixing the config file
+function handleCheckFixConfig() {
+  header('Config File Validation');
+  
+  try {
+    // Read the raw file content
+    const rawContent = fs.readFileSync(CONFIG_FILE_PATH, 'utf8');
+    info(`Read config file: ${CONFIG_FILE_PATH}`);
+    
+    // Try to parse it as JSON
+    try {
+      const parsedConfig = JSON.parse(rawContent);
+      success('JSON syntax is valid!');
+      
+      // Check structure (should have mcpServers at minimum)
+      let structureValid = true;
+      let structureIssues = [];
+      
+      if (!parsedConfig.mcpServers) {
+        structureValid = false;
+        structureIssues.push('Missing "mcpServers" object');
+      } else if (typeof parsedConfig.mcpServers !== 'object') {
+        structureValid = false;
+        structureIssues.push('"mcpServers" is not an object');
+      }
+      
+      if (parsedConfig.disabledMcpServers && typeof parsedConfig.disabledMcpServers !== 'object') {
+        structureValid = false;
+        structureIssues.push('"disabledMcpServers" is not an object');
+      }
+      
+      // Report structure validation
+      if (structureValid) {
+        success('Config structure is valid!');
+        
+        // Count the MCPs
+        const enabledCount = Object.keys(parsedConfig.mcpServers || {}).length;
+        const disabledCount = Object.keys(parsedConfig.disabledMcpServers || {}).length;
+        
+        info(`Found ${enabledCount} enabled MCPs and ${disabledCount} disabled MCPs.`);
+        
+        rl.question('\nPress Enter to return to the main menu', () => {
+          showMainMenu();
+        });
+      } else {
+        warning('Config structure has issues:');
+        structureIssues.forEach(issue => warning(` - ${issue}`));
+        
+        rl.question('\nWould you like to fix these issues? (y/n): ', (answer) => {
+          if (answer.toLowerCase() === 'y') {
+            fixConfigStructure(parsedConfig, structureIssues);
+          } else {
+            showMainMenu();
+          }
+        });
+      }
+    } catch (jsonError) {
+      error('JSON syntax error detected!');
+      info('Attempting to identify and fix the issue...');
+      
+      // Attempt to fix common JSON errors
+      attemptJsonFix(rawContent);
+    }
+  } catch (error) {
+    error(`Error reading config file: ${error.message}`);
+    rl.question('\nPress Enter to return to the main menu', () => {
+      showMainMenu();
+    });
+  }
+}
+
+// Fix config structure issues
+function fixConfigStructure(config, issues) {
+  // Create a backup first
+  createManualBackupSilent();
+  
+  // Fix each reported issue
+  if (!config.mcpServers || typeof config.mcpServers !== 'object') {
+    config.mcpServers = {};
+    info('Created empty "mcpServers" object');
+  }
+  
+  if (config.disabledMcpServers && typeof config.disabledMcpServers !== 'object') {
+    config.disabledMcpServers = {};
+    info('Reset "disabledMcpServers" to an empty object');
+  }
+  
+  // Write the fixed config
+  try {
+    fs.writeFileSync(CONFIG_FILE_PATH, JSON.stringify(config, null, 2));
+    success('Fixed config structure and saved file!');
+  } catch (error) {
+    error(`Error saving fixed config: ${error.message}`);
+  }
+  
+  rl.question('\nPress Enter to return to the main menu', () => {
+    showMainMenu();
+  });
+}
+
+// Create a backup without user interaction
+function createManualBackupSilent() {
+  try {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupPath = path.join(BACKUP_DIR, `config-backup-${timestamp}.json`);
+    
+    info(`Creating backup before repair: ${backupPath}`);
+    fs.writeFileSync(backupPath, fs.readFileSync(CONFIG_FILE_PATH));
+    success(`Backup created successfully`);
+    
+    return backupPath;
+  } catch (error) {
+    error(`Failed to create backup: ${error.message}`);
+    return null;
+  }
+}
+
+// Attempt to fix common JSON syntax errors
+function attemptJsonFix(rawContent) {
+  createManualBackupSilent();
+  
+  let fixedContent = rawContent;
+  let fixApplied = false;
+  
+  // Common JSON fix: trailing commas
+  const trailingCommaRegex = /,(\s*[}\]])/g;
+  fixedContent = fixedContent.replace(trailingCommaRegex, '$1');
+  
+  // Common JSON fix: missing commas
+  const missingCommaRegex = /(["\d])\s*\n\s*(["{[])/g;
+  fixedContent = fixedContent.replace(missingCommaRegex, '$1,\n$2');
+  
+  // Common JSON fix: unquoted property names
+  const unquotedPropRegex = /{\s*(\w+)\s*:/g;
+  while (unquotedPropRegex.test(fixedContent)) {
+    fixedContent = fixedContent.replace(unquotedPropRegex, '{"$1":');
+    fixApplied = true;
+  }
+  
+  // Common JSON fix: single quotes instead of double quotes
+  if (fixedContent.includes("'") && !fixedContent.includes('"')) {
+    fixedContent = fixedContent.replace(/'/g, '"');
+    fixApplied = true;
+  }
+  
+  // Try to parse the fixed content
+  try {
+    const parsedConfig = JSON.parse(fixedContent);
+    
+    // If we get here, the fixes worked
+    info('Successfully fixed JSON syntax issues!');
+    
+    // Write the fixed content
+    fs.writeFileSync(CONFIG_FILE_PATH, JSON.stringify(parsedConfig, null, 2));
+    success('Saved fixed configuration file');
+    
+    // Check structure as well
+    let structureIssues = [];
+    if (!parsedConfig.mcpServers) {
+      structureIssues.push('Missing "mcpServers" object');
+    } else if (typeof parsedConfig.mcpServers !== 'object') {
+      structureIssues.push('"mcpServers" is not an object');
+    }
+    
+    if (parsedConfig.disabledMcpServers && typeof parsedConfig.disabledMcpServers !== 'object') {
+      structureIssues.push('"disabledMcpServers" is not an object');
+    }
+    
+    if (structureIssues.length > 0) {
+      warning('Config structure still has issues:');
+      structureIssues.forEach(issue => warning(` - ${issue}`));
+      
+      rl.question('\nWould you like to fix these structure issues too? (y/n): ', (answer) => {
+        if (answer.toLowerCase() === 'y') {
+          fixConfigStructure(parsedConfig, structureIssues);
+        } else {
+          showMainMenu();
+        }
+      });
+    } else {
+      success('Config structure is valid!');
+      rl.question('\nPress Enter to return to the main menu', () => {
+        showMainMenu();
+      });
+    }
+  } catch (error) {
+    // If automatic fixes didn't work, suggest manual editing
+    error('Automatic fixes were not successful.');
+    info('Here are common JSON syntax errors to look for:');
+    info('1. Trailing commas (e.g., {"key": value,})');
+    info('2. Missing commas between properties');
+    info('3. Unquoted property names');
+    info('4. Single quotes instead of double quotes');
+    info('5. Unmatched brackets or braces');
+    
+    // Attempt to show the location of the error
+    const errorMatch = error.message.match(/position (\d+)/);
+    if (errorMatch) {
+      const errorPos = parseInt(errorMatch[1]);
+      const startPos = Math.max(0, errorPos - 30);
+      const endPos = Math.min(rawContent.length, errorPos + 30);
+      const snippet = rawContent.substring(startPos, endPos);
+      
+      warning('\nError likely near:');
+      console.log(snippet);
+      console.log(' '.repeat(Math.min(30, errorPos - startPos)) + '^');
+    }
+    
+    rl.question('\nWould you like to restore from a backup? (y/n): ', (answer) => {
+      if (answer.toLowerCase() === 'y') {
+        handleBackupRestoreMenu();
+      } else {
+        showMainMenu();
+      }
+    });
+  }
+}
+
+// Start the application
+showMainMenu();
