@@ -1,23 +1,17 @@
-// Claude Desktop Config Manager
-// This script helps toggle MCP servers on/off in the Claude Desktop config file
-
+// Claude Desktop Config Manager - Compact Version
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
+const { exec } = require('child_process');
 
-// =======================================
-// CONFIGURATION SECTION - EDIT AS NEEDED
-// =======================================
-
-// Base directory for Claude files (change this to match your system)
-const CLAUDE_DIR = 'C:\\Users\\username\\AppData\\Roaming\\Claude';
+// Configuration 
+const CLAUDE_DIR = 'C:\\Users\\user\\AppData\\Roaming\\Claude';
 const CONFIG_FILE_PATH = path.join(CLAUDE_DIR, 'claude_desktop_config.json');
 const BACKUP_DIR = path.join(CLAUDE_DIR, 'config-backups');
 const PRESET_DIR = path.join(CLAUDE_DIR, 'presets');
 
-// =======================================
-// END OF CONFIGURATION SECTION
-// =======================================
+// Claude Desktop executable path (adjust as needed)
+const CLAUDE_EXECUTABLE = 'C:\\Users\\user\\AppData\\Local\\AnthropicClaude\\Claude.exe';
 
 // Setup directories
 [BACKUP_DIR, PRESET_DIR].forEach(dir => !fs.existsSync(dir) && fs.mkdirSync(dir, { recursive: true }));
@@ -132,27 +126,103 @@ function handlePresets(mode) {
     presets.forEach((p, i) => ui.info(`${i+1}. ${p.name}`));
     
     if (mode === 'load') {
-      rl.question('\nSelect preset to load (or "b" for back): ', answer => {
-        if (answer.toLowerCase() === 'b') return showMainMenu();
+      ui.menu('\n1. Standard Load (replace all MCPs)');
+      ui.menu('2. Smart Load (preserve new MCPs)');
+      ui.menu('3. Back to Main Menu');
+      
+      rl.question('\nSelect load method: ', method => {
+        if (method === '3' || method.toLowerCase() === 'b') return showMainMenu();
         
-        const idx = parseInt(answer) - 1;
-        if (idx >= 0 && idx < presets.length) {
-          try {
-            const data = fs.readFileSync(presets[idx].path, 'utf8');
-            writeConfig(JSON.parse(data));
-            ui.success(`Loaded preset: ${presets[idx].name}`);
-          } catch (e) {
-            ui.error(`Failed to load preset: ${e.message}`);
-          }
+        if (method === '1' || method === '2') {
+          rl.question('\nSelect preset to load: ', answer => {
+            const idx = parseInt(answer) - 1;
+            if (idx >= 0 && idx < presets.length) {
+              try {
+                const presetData = fs.readFileSync(presets[idx].path, 'utf8');
+                const presetConfig = JSON.parse(presetData);
+                
+                if (method === '1') {
+                  // Standard load - completely replace config
+                  writeConfig(presetConfig);
+                  ui.success(`Loaded preset: ${presets[idx].name}`);
+                } else {
+                  // Smart load - preserve new MCPs
+                  smartLoadPreset(presetConfig);
+                }
+              } catch (e) {
+                ui.error(`Failed to load preset: ${e.message}`);
+              }
+            } else {
+              ui.error('Invalid selection');
+            }
+            showMainMenu();
+          });
         } else {
-          ui.error('Invalid selection');
+          ui.error('Invalid option');
+          handlePresets('load');
         }
-        showMainMenu();
       });
     }
   } catch (error) {
     ui.error(`Error: ${error.message}`);
     showMainMenu();
+  }
+}
+
+// Smart load preset - preserves new MCPs (disabled by default)
+function smartLoadPreset(presetConfig) {
+  try {
+    const currentConfig = readConfig();
+    
+    // Get all MCPs from current config
+    const currentMcps = {
+      ...currentConfig.mcpServers || {},
+      ...currentConfig.disabledMcpServers || {}
+    };
+    
+    // Get all MCPs from preset
+    const presetMcps = {
+      ...presetConfig.mcpServers || {},
+      ...presetConfig.disabledMcpServers || {}
+    };
+    
+    // Initialize new config with empty objects
+    const newConfig = {
+      mcpServers: {},
+      disabledMcpServers: {}
+    };
+    
+    // Track MCPs added since preset was created
+    const newMcps = [];
+    
+    // Process all current MCPs
+    Object.keys(currentMcps).forEach(mcp => {
+      if (presetMcps[mcp]) {
+        // MCP exists in preset - use preset's enabled/disabled status
+        if (presetConfig.mcpServers && presetConfig.mcpServers[mcp]) {
+          newConfig.mcpServers[mcp] = currentMcps[mcp];
+        } else {
+          newConfig.disabledMcpServers[mcp] = currentMcps[mcp];
+        }
+      } else {
+        // MCP is new, not in preset - keep it disabled by default
+        newConfig.disabledMcpServers[mcp] = currentMcps[mcp];
+        newMcps.push(mcp);
+      }
+    });
+    
+    // Apply the new configuration
+    writeConfig(newConfig);
+    
+    // Show summary
+    ui.success(`Smart-loaded preset with ${Object.keys(newConfig.mcpServers).length} enabled and ${Object.keys(newConfig.disabledMcpServers).length} disabled MCPs`);
+    
+    if (newMcps.length > 0) {
+      ui.info('\nNew MCPs found (not in preset) - disabled by default:');
+      newMcps.forEach(mcp => ui.info(`- ${mcp}`));
+    }
+  } catch (error) {
+    ui.error(`Error during smart load: ${error.message}`);
   }
 }
 
@@ -447,6 +517,62 @@ function checkConfig() {
   }
 }
 
+// Restart Claude Desktop
+function restartClaudeDesktop() {
+  // Check if Claude executable path exists
+  if (!fs.existsSync(CLAUDE_EXECUTABLE)) {
+    ui.error(`Claude executable not found at: ${CLAUDE_EXECUTABLE}`);
+    ui.info('Please update the CLAUDE_EXECUTABLE path in the script configuration.');
+    rl.question('\nPress Enter to return to the main menu', () => {
+      showMainMenu();
+    });
+    return;
+  }
+
+  ui.header('Restart Claude Desktop');
+  ui.info('This will close the current Claude Desktop instance and start a new one.');
+  rl.question('Do you want to proceed? (y/n): ', answer => {
+    if (answer.toLowerCase() === 'y') {
+      ui.info('Attempting to restart Claude Desktop...');
+      
+      // Use taskkill to close Claude Desktop
+      exec('taskkill /f /im Claude.exe', (error, stdout, stderr) => {
+        if (error) {
+          // It's OK if Claude wasn't running
+          ui.info('Claude Desktop was not running or could not be closed.');
+        } else {
+          ui.success('Claude Desktop closed successfully.');
+        }
+        
+        // Wait a moment before starting Claude again
+        setTimeout(() => {
+          ui.info('Starting Claude Desktop...');
+          
+          // Start Claude Desktop and detach the process
+          const child = exec(`start "" "${CLAUDE_EXECUTABLE}"`, (error) => {
+            if (error) {
+              ui.error(`Failed to start Claude Desktop: ${error.message}`);
+            }
+          });
+          
+          // Don't wait for the process, just finish
+          ui.success('Claude Desktop launch initiated!');
+          ui.info('Note: Claude Desktop may take a moment to fully start.');
+          ui.info('Exiting Config Manager...');
+          
+          // Exit after a brief pause
+          setTimeout(() => {
+            rl.close();
+            process.exit(0);
+          }, 1500);
+        }, 1000);
+      });
+    } else {
+      showMainMenu();
+    }
+  });
+}
+
 // Main menu
 function showMainMenu() {
   ui.header('Claude Desktop Config Manager');
@@ -457,7 +583,8 @@ function showMainMenu() {
   ui.menu('5. Backup & Restore');
   ui.menu('6. Check/Fix Config File');
   ui.menu('7. Enable All MCPs');
-  ui.menu('8. Exit');
+  ui.menu('8. Restart Claude Desktop');
+  ui.menu('9. Exit');
   
   rl.question('\nSelect option: ', answer => {
     switch(answer) {
@@ -477,7 +604,8 @@ function showMainMenu() {
         }
         showMainMenu();
         break;
-      case '8': rl.close(); break;
+      case '8': restartClaudeDesktop(); break;
+      case '9': rl.close(); break;
       default: ui.error('Invalid option'); showMainMenu();
     }
   });
